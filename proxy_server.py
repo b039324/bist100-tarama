@@ -5,18 +5,17 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import time
 import random
+import json
+import os
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
-import json
-import os
 
 warnings.filterwarnings('ignore')
 
 app = Flask(__name__)
 CORS(app)
 
-# Render'da sadece /tmp/ yazılabilir
 ALARMS_FILE = '/tmp/alarms.json'
 
 BIST100_SYMBOLS = [
@@ -47,40 +46,42 @@ FUNDAMENTAL_DATA = {
     'PGSUS': {'pe': 5.2, 'pb': 0.72, 'sector': 'Ulaştırma'},
 }
 
+
 def get_fundamental(symbol):
     if symbol in FUNDAMENTAL_DATA:
         return FUNDAMENTAL_DATA[symbol]
-    return {'pe': round(random.uniform(2, 40), 1), 'pb': round(random.uniform(0.3, 8), 2), 'sector': random.choice(['Sanayi', 'Teknoloji', 'Hizmet', 'Enerji', 'Gıda'])}
+    return {
+        'pe': round(random.uniform(2, 40), 1),
+        'pb': round(random.uniform(0.3, 8), 2),
+        'sector': random.choice(['Sanayi', 'Teknoloji', 'Hizmet', 'Enerji', 'Gıda'])
+    }
+
 
 cache = {'data': None, 'timestamp': 0}
 
-# ============================================
-# ANA SAYFA - HTML DOSYASINI SUN
-# ============================================
+
 @app.route('/')
 def index():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'BIST_Tarama_Canli.html')
 
-# ============================================
-# CANLI VERİ API
-# ============================================
+
 @app.route('/api/bist100/all')
 def get_all_stocks():
     global cache
-    
+
     current_time = time.time()
     if cache['data'] and (current_time - cache['timestamp']) < 300:
+        print(f"📦 Önbellekten servis: {len(cache['data'])} hisse")
         return jsonify({'success': True, 'data': cache['data'], 'count': len(cache['data']), 'cached': True})
-    
-    print(f"🔄 Yahoo Finance canlı veri çekiliyor...")
+
+    print(f"🔄 Yahoo Finance canlı veri çekiliyor... ({len(BIST100_SYMBOLS)} hisse)")
     stocks = []
-    
+
     def fetch_single(symbol):
         try:
             ticker = yf.Ticker(f"{symbol}.IS")
-        # Zaman aşımını uzat
-        hist = ticker.history(period="5d", timeout=30)
-        if hist.empty or len(hist) < 2:
+            hist = ticker.history(period="5d")
+            if hist.empty or len(hist) < 2:
                 return None
             price = float(hist['Close'].iloc[-1])
             prev = float(hist['Close'].iloc[-2])
@@ -89,36 +90,47 @@ def get_all_stocks():
             change = ((price - prev) / prev) * 100
             fund = get_fundamental(symbol)
             return {
-                'symbol': symbol, 'price': round(price, 2), 'changePercent': round(change, 2),
+                'symbol': symbol,
+                'price': round(price, 2),
+                'changePercent': round(change, 2),
                 'volume': int(hist['Volume'].iloc[-1]) if 'Volume' in hist else 0,
-                'high': round(float(hist['High'].iloc[-1]), 2), 'low': round(float(hist['Low'].iloc[-1]), 2),
-                'open': round(float(hist['Open'].iloc[-1]), 2), 'prevClose': round(prev, 2),
-                'rsi14': round(40 + random.random() * 25, 1), 'macd': round(random.random() * 2 - 1, 4),
-                'ma50': round(price * 0.95, 2), 'ma200': round(price * 0.88, 2),
-                'pe': fund['pe'], 'pb': fund['pb'], 'sector': fund['sector'],
+                'high': round(float(hist['High'].iloc[-1]), 2),
+                'low': round(float(hist['Low'].iloc[-1]), 2),
+                'open': round(float(hist['Open'].iloc[-1]), 2),
+                'prevClose': round(prev, 2),
+                'rsi14': round(40 + random.random() * 25, 1),
+                'macd': round(random.random() * 2 - 1, 4),
+                'ma50': round(price * 0.95, 2),
+                'ma200': round(price * 0.88, 2),
+                'pe': fund['pe'],
+                'pb': fund['pb'],
+                'sector': fund['sector'],
                 'dataSource': 'Yahoo Finance Canlı'
             }
-        except:
+        except Exception as e:
             return None
 
     with ThreadPoolExecutor(max_workers=20) as executor:
         futures = {executor.submit(fetch_single, s): s for s in BIST100_SYMBOLS}
+        completed = 0
         for future in as_completed(futures):
+            completed += 1
             result = future.result()
             if result:
                 stocks.append(result)
+            if completed % 20 == 0:
+                print(f"  ⏳ {completed}/{len(BIST100_SYMBOLS)} ({len(stocks)} başarılı)")
+
+    print(f"✅ Toplam {len(stocks)} hisse çekildi")
 
     if len(stocks) < 5:
-    return jsonify({'success': False, 'error': f'Sadece {len(stocks)} hisse çekilebildi'}), 503
+        return jsonify({'success': False, 'error': f'Sadece {len(stocks)} hisse çekilebildi'}), 503
 
     cache['data'] = stocks
     cache['timestamp'] = current_time
-    print(f"✅ {len(stocks)} hisse çekildi")
     return jsonify({'success': True, 'data': stocks, 'count': len(stocks), 'source': 'Yahoo Finance Canlı', 'cached': False})
 
-# ============================================
-# ALARM API
-# ============================================
+
 @app.route('/api/alarms', methods=['GET', 'POST', 'DELETE'])
 def manage_alarms():
     try:
@@ -126,38 +138,58 @@ def manage_alarms():
             alarms = []
             if os.path.exists(ALARMS_FILE):
                 with open(ALARMS_FILE, 'r', encoding='utf-8') as f:
-                    try: alarms = json.load(f)
-                    except: alarms = []
+                    try:
+                        alarms = json.load(f)
+                    except:
+                        alarms = []
             return jsonify({'success': True, 'alarms': alarms})
+
         elif request.method == 'POST':
             data = request.get_json(silent=True) or {}
-            alarm = {'id': str(int(time.time() * 1000)), 'symbol': data.get('symbol', '').upper(), 'type': data.get('type', ''), 'value': float(data.get('value', 0))}
+            alarm = {
+                'id': str(int(time.time() * 1000)),
+                'symbol': data.get('symbol', '').upper(),
+                'type': data.get('type', ''),
+                'value': float(data.get('value', 0))
+            }
             alarms = []
             if os.path.exists(ALARMS_FILE):
                 with open(ALARMS_FILE, 'r', encoding='utf-8') as f:
-                    try: alarms = json.load(f)
-                    except: alarms = []
+                    try:
+                        alarms = json.load(f)
+                    except:
+                        alarms = []
             alarms.append(alarm)
             with open(ALARMS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(alarms, f, ensure_ascii=False, indent=2)
             return jsonify({'success': True, 'alarm': alarm})
+
         elif request.method == 'DELETE':
             alarm_id = request.args.get('id', '')
             alarms = []
             if os.path.exists(ALARMS_FILE):
                 with open(ALARMS_FILE, 'r', encoding='utf-8') as f:
-                    try: alarms = json.load(f)
-                    except: alarms = []
+                    try:
+                        alarms = json.load(f)
+                    except:
+                        alarms = []
             alarms = [a for a in alarms if a.get('id') != alarm_id]
             with open(ALARMS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(alarms, f, ensure_ascii=False, indent=2)
             return jsonify({'success': True})
     except Exception as e:
+        print(f"Alarm hatası: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/health')
 def health():
-    return jsonify({'status': 'running', 'total': len(BIST100_SYMBOLS)})
+    return jsonify({
+        'status': 'running',
+        'total_symbols': len(BIST100_SYMBOLS),
+        'cache_size': len(cache['data']) if cache['data'] else 0
+    })
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
