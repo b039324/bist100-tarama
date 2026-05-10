@@ -1,5 +1,5 @@
 """
-BIST 100 Render.com - Investing.com Canlı Veri
+BIST 100 Render.com - Finnhub Canlı Veri
 """
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -16,9 +16,9 @@ warnings.filterwarnings('ignore')
 app = Flask(__name__)
 CORS(app)
 
+FINNHUB_API_KEY = "d804in1r01qj3ct91mm0d804in1r01qj3ct91mmg"
 ALARMS_FILE = '/tmp/alarms.json'
 
-# BIST 100 - 100 HİSSE
 BIST100_SYMBOLS = [
     'AEFES', 'AGHOL', 'AKBNK', 'AKFGY', 'AKSA', 'ALARK', 'ALFAS', 'ARCLK', 'ASELS', 'ASTOR',
     'AYGAZ', 'BAGFS', 'BERA', 'BIMAS', 'BIOEN', 'BRSAN', 'CANTE', 'CCOLA', 'CWENE', 'DOHOL',
@@ -61,63 +61,41 @@ def get_fundamental(symbol):
 
 cache = {'data': None, 'timestamp': 0}
 
-
 @app.route('/')
 def index():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'BIST_Tarama_Canli.html')
 
-
 @app.route('/api/bist100/all')
 def get_all_stocks():
     global cache
-
     current_time = time.time()
     if cache['data'] and (current_time - cache['timestamp']) < 300:
         print(f"📦 Önbellekten: {len(cache['data'])} hisse")
         return jsonify({'success': True, 'data': cache['data'], 'count': len(cache['data']), 'cached': True})
 
-    print(f"🔄 Investing.com'dan 100 hisse çekiliyor...")
+    print(f"🔄 Finnhub'dan 100 hisse çekiliyor...")
     stocks = []
 
     def fetch_single(symbol):
         try:
-            # Investing.com BIST hisse sayfası
-            url = f"https://tr.investing.com/equities/{symbol.lower()}-IS"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept-Language': 'tr-TR,tr;q=0.9',
-            }
-            
-            resp = requests.get(url, headers=headers, timeout=15)
-            
+            url = f"https://finnhub.io/api/v1/quote?symbol={symbol}.IS&token={FINNHUB_API_KEY}"
+            resp = requests.get(url, timeout=15)
             if resp.status_code == 200:
-                html = resp.text
-                
-                # Fiyatı bul
-                price_match = re.search(r'"last"\s*:\s*([\d.]+)', html)
-                if not price_match:
-                    price_match = re.search(r'data-test="instrument-price-last">([\d.,]+)', html)
-                
-                if price_match:
-                    price = float(price_match.group(1).replace('.', '').replace(',', '.'))
-                    
-                    # Değişim bul
-                    change = 0.0
-                    change_match = re.search(r'"changePercent"\s*:\s*([\d.-]+)', html)
-                    if change_match:
-                        change = float(change_match.group(1))
-                    
+                data = resp.json()
+                price = data.get('c', 0)
+                prev = data.get('pc', price)
+                if price > 0:
+                    change = ((price - prev) / prev) * 100 if prev > 0 else 0
                     fund = get_fundamental(symbol)
-                    
                     return {
                         'symbol': symbol,
                         'price': round(price, 2),
                         'changePercent': round(change, 2),
                         'volume': random.randint(10000000, 500000000),
-                        'high': round(price * 1.02, 2),
-                        'low': round(price * 0.98, 2),
-                        'open': round(price * (1 - change/100), 2),
-                        'prevClose': round(price * (1 - change/100), 2),
+                        'high': round(data.get('h', price), 2),
+                        'low': round(data.get('l', price), 2),
+                        'open': round(data.get('o', price), 2),
+                        'prevClose': round(prev, 2),
                         'rsi14': round(40 + random.random() * 25, 1),
                         'macd': round(random.random() * 2 - 1, 4),
                         'ma50': round(price * 0.95, 2),
@@ -125,7 +103,7 @@ def get_all_stocks():
                         'pe': fund['pe'],
                         'pb': fund['pb'],
                         'sector': fund['sector'],
-                        'dataSource': 'Investing.com Canlı'
+                        'dataSource': 'Finnhub Canlı'
                     }
         except:
             pass
@@ -144,13 +122,12 @@ def get_all_stocks():
 
     print(f"✅ {len(stocks)} hisse çekildi")
 
-    if len(stocks) < 5:
-        return jsonify({'success': False, 'error': 'Yetersiz veri'}), 503
+    if len(stocks) < 3:
+        return jsonify({'success': False, 'error': f'Sadece {len(stocks)} hisse'}), 503
 
     cache['data'] = stocks
     cache['timestamp'] = current_time
-    return jsonify({'success': True, 'data': stocks, 'count': len(stocks), 'source': 'Investing.com Canlı', 'cached': False})
-
+    return jsonify({'success': True, 'data': stocks, 'count': len(stocks), 'source': 'Finnhub Canlı', 'cached': False})
 
 @app.route('/api/alarms', methods=['GET', 'POST', 'DELETE'])
 def manage_alarms():
@@ -188,11 +165,9 @@ def manage_alarms():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
-
 @app.route('/api/health')
 def health():
     return jsonify({'status': 'running', 'total': len(BIST100_SYMBOLS)})
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
