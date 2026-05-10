@@ -107,8 +107,8 @@ def get_all_stocks():
             if result:
                 stocks.append(result)
 
-    if len(stocks) < 30:
-        return jsonify({'success': False, 'error': f'Sadece {len(stocks)} hisse çekilebildi'}), 503
+    if len(stocks) < 5:
+    return jsonify({'success': False, 'error': f'Sadece {len(stocks)} hisse çekilebildi'}), 503
 
     cache['data'] = stocks
     cache['timestamp'] = current_time
