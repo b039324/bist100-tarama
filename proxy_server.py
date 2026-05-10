@@ -78,8 +78,9 @@ def get_all_stocks():
     def fetch_single(symbol):
         try:
             ticker = yf.Ticker(f"{symbol}.IS")
-            hist = ticker.history(period="5d")
-            if hist.empty or len(hist) < 2:
+        # Zaman aşımını uzat
+        hist = ticker.history(period="5d", timeout=30)
+        if hist.empty or len(hist) < 2:
                 return None
             price = float(hist['Close'].iloc[-1])
             prev = float(hist['Close'].iloc[-2])
